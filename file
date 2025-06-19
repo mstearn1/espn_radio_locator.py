@@ -1,0 +1,78 @@
+import streamlit as st
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from geopy.geocoders import Nominatim
+import time
+
+st.set_page_config(page_title="ESPN Radio Stations", layout="wide")
+st.title("📻 ESPN Radio Stations & Hosts Map")
+
+@st.cache_data(show_spinner=False)
+def scrape_espn_radio_affiliates():
+    url = "https://www.espn.com/espnradio/affiliate"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+
+    stations = []
+    tables = soup.find_all('table')
+    for table in tables:
+        rows = table.find_all('tr')[1:]
+        for row in rows:
+            cols = row.find_all('td')
+            if len(cols) >= 3:
+                city = cols[0].get_text(strip=True)
+                state = cols[1].get_text(strip=True)
+                frequency = cols[2].get_text(strip=True)
+                stations.append({
+                    "City": city,
+                    "State": state,
+                    "Frequency": frequency,
+                    "Full Location": f"{city}, {state}"
+                })
+    return pd.DataFrame(stations)
+
+@st.cache_data(show_spinner=False)
+def geocode_locations(df):
+    geolocator = Nominatim(user_agent="espn_radio_locator")
+    lats, lons = [], []
+    for loc in df["Full Location"]:
+        try:
+            location = geolocator.geocode(loc)
+            if location:
+                lats.append(location.latitude)
+                lons.append(location.longitude)
+            else:
+                lats.append(None)
+                lons.append(None)
+        except:
+            lats.append(None)
+            lons.append(None)
+        time.sleep(1)  # To avoid API rate limits
+    df["Latitude"] = lats
+    df["Longitude"] = lons
+    return df.dropna(subset=["Latitude", "Longitude"])
+
+# Load and process data
+with st.spinner("Scraping ESPN Radio affiliates..."):
+    raw_df = scrape_espn_radio_affiliates()
+    geo_df = geocode_locations(raw_df)
+
+# Sidebar dropdown
+cities = geo_df["Full Location"].sort_values().unique()
+selected_city = st.sidebar.selectbox("Select a city:", cities)
+
+# Show selected station info
+station = geo_df[geo_df["Full Location"] == selected_city].iloc[0]
+st.subheader(f"🎙️ {station['Full Location']} – {station['Frequency']}")
+
+# Placeholder for future host scraping (if you want that added, I can build it)
+st.write("_Host info for this station could be added with a deeper scrape of individual station websites._")
+
+# Display map
+st.subheader("📍 Station Map")
+st.map(geo_df[['Latitude', 'Longitude']])
+
+# Optional: Show table
+with st.expander("See all stations"):
+    st.dataframe(geo_df[['City', 'State', 'Frequency']], use_container_width=True)
